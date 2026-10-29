@@ -4,7 +4,7 @@
 
 **A chat page inside magpie's window.** Talk with magpie's own models, instructions, skills and MCP servers — no second agent needed.
 
-[![版本](https://img.shields.io/badge/version-0.1.6-blue)](https://github.com/Magiczerowxy/magpie-chat)
+[![版本](https://img.shields.io/badge/version-0.1.19-blue)](https://github.com/Magiczerowxy/magpie-chat)
 [![许可](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ---
@@ -18,10 +18,12 @@
 - **用 magpie 的配置**。右侧栏里勾选 `~/.config/magpie/library/` 的指令与技能（拼进 system prompt）、勾选 MCP 服务器（工具以 `tool_calls` 真正执行）。
 - **多模态**。左下角「+」选图片或文件，也可以直接把文件拖进页面，或粘贴剪贴板里的图片。图片以 `image_url` 交给模型，气泡里显示缩略图、点开看大图。
 - **流式输出**。思考过程边收边展开，输出结束后自动收起；正文逐字出现。
+- **模型状态**。每条回复底部有一行：生成中显示「Magpie正在觅食ing… · 2s」并走计时；完成变绿「Magpie找到了食物！ · 2s」；出错变红「Magpie没有找到食物」（颜色平滑过渡）。耗时随对话保存，重新打开还能看到。
+- **新对话草稿**。点「+」左侧立即出现一条「新对话」；发送第一条后标题换成你输入的内容；一个字没写就切到别的对话，这条草稿会自动消失，不留空壳。
 - **公式**。`$…$`、`$$…$$`、`\(…\)`、`\[…\]` 由本地 KaTeX 渲染，随包打包，不连 CDN。
 - **对话留存**。存在 magpie 配置目录的 `magpie-chat/conversations/`；每条可以置顶或删除。
 - **和 magpie 同一个样子**。配色与字体取自 magpie 自己的设计令牌，切换主题时对话页跟着变。
-- **可调布局**。右侧栏「布局」里两个滑条：会话区宽度（100% 即铺满，最窄 560px）、输入框宽度；左右两侧栏都能拖拽调宽、也都能收起。
+- **可调布局**。右侧栏「布局」里两个滑条：会话区宽度（100% 即铺满，最窄 560px）、输入框宽度；还能打开「同步调整」让两者始终一致（调任一个另一个跟随，开启时取较小的那个统一）。左右两侧栏都能拖拽调宽、也都能收起。
 - **代码折叠**。一条消息里有多段代码时只展开最后一段，其余收起。
 
 ### 截图
@@ -39,6 +41,30 @@ magpie plugin add Magiczerowxy/magpie-chat
 或者在应用里：**插件 → 发现 → 非官方插件 · GitHub**，搜索 `magpie-chat` 后点「安装」。
 
 装好后侧栏「插件」里点「对话」即可。
+
+### 安装时提示 403 / 证书错误
+
+如果装的时候 `bun` 报这种错：
+
+```
+error: GET https://api.github.com/repos/.../tarball/ - 403
+```
+
+或者 `unable to get local issuer certificate`，多半是本机 `hosts` 被别的工具改过，把 GitHub 的域名指到了 `127.0.0.1`。常见来源是 Steam / Twitch 加速类工具（`steamcommunity_302` 之类）。
+
+先查一下：
+
+```powershell
+findstr /i github C:\Windows\System32\drivers\etc\hosts
+```
+
+出现 `127.0.0.1 github.com` 这样的行就是它。三种办法：
+
+1. 关掉那个加速工具（多数会自己还原 hosts）
+2. 用管理员权限编辑 hosts，删掉所有含 `github` 的行，再 `ipconfig /flushdns`
+3. 不折腾网络，把仓库下成文件夹直接装：`magpie plugin add "C:\path\to\magpie-chat"`
+
+这不是插件的问题——在 hosts 正常的机器上 `magpie plugin add Magiczerowxy/magpie-chat` 可以直接装。
 
 ### 没有登录，也没有账号
 
@@ -81,6 +107,8 @@ magpie 的插件页面跑在 `sandbox="allow-scripts"` 的框架里：没有网�
 - 图片以 base64 内联发送，单图上限 24MB；对话很长时请求体也会变大。
 - 供应商图标：magpie 的内置图标编在它自己的二进制里，取不到时服务端会画一个首字母 SVG。
 - 工具调用最多 8 轮。
+- 新对话草稿只存在内存里，刷新页面会消失（空白对话本来就不该留下）。
+- 字号固定 13px，不跟随 magpie 的界面缩放。
 
 ---
 
@@ -93,10 +121,12 @@ magpie 的插件页面跑在 `sandbox="allow-scripts"` 的框架里：没有网�
 - **Uses magpie's own library.** Tick instructions and skills from `~/.config/magpie/library/` (folded into the system prompt) and MCP servers (their tools run as real `tool_calls`).
 - **Multimodal.** Pick images or files with the "+" button, drop files anywhere on the page, or paste an image. Images go to the model as `image_url`; thumbnails appear in the bubble and open full size.
 - **Streaming.** Reasoning unfolds while it arrives and collapses automatically when the answer is done; the reply streams in.
+- **Model status.** Every reply gets a line at its foot: while generating it reads "Magpie正在觅食ing… · 2s" with a running timer; on success it turns green ("Magpie找到了食物！ · 2s"); on failure it turns red ("Magpie没有找到食物") with a smooth colour transition. The elapsed time is saved with the conversation.
+- **Draft conversations.** Clicking "+" puts a "新对话" row in the sidebar straight away; the title becomes what you typed as soon as you send. Switch away without writing anything and the draft disappears — no empty shells left behind.
 - **Math.** `$…$`, `$$…$$`, `\(…\)` and `\[…\]` render through a bundled KaTeX — no CDN.
 - **Conversations persist.** Stored under `magpie-chat/conversations/` in magpie's config directory; each can be pinned or deleted.
 - **Looks like magpie.** Colors and fonts come from magpie's own design tokens, so the page follows the window theme.
-- **Adjustable layout.** Two sliders under Layout: conversation width (100% fills the pane, never narrower than 560px) and composer width. Both sidebars can be dragged and collapsed.
+- **Adjustable layout.** Two sliders under Layout: conversation width (100% fills the pane, never narrower than 560px) and composer width, plus a **Sync** switch that keeps the two equal (move either one, the other follows; turning it on adopts the smaller of the two). Both sidebars can be dragged and collapsed.
 - **Collapsible code.** When a reply has several code blocks, only the last one is expanded.
 
 ### Screenshot
@@ -114,6 +144,26 @@ magpie plugin add Magiczerowxy/magpie-chat
 Or in the app: **Plugins → Discover → Unofficial · GitHub**, search `magpie-chat`, click Install.
 
 Then open **Chat** under Plugins in the sidebar.
+
+### If install fails with 403 / a certificate error
+
+If `bun` reports something like:
+
+```
+error: GET https://api.github.com/repos/.../tarball/ - 403
+```
+
+or `unable to get local issuer certificate`, your machine's `hosts` file has probably been edited by a game/streaming accelerator (tools like `steamcommunity_302`) that points GitHub domains at `127.0.0.1`.
+
+Check it:
+
+```powershell
+findstr /i github C:\Windows\System32\drivers\etc\hosts
+```
+
+If you see `127.0.0.1 github.com` lines, that's the cause. Either quit that tool (it usually restores the file), remove the `github` lines from `hosts` as administrator and run `ipconfig /flushdns`, or skip the network entirely and install from a folder: `magpie plugin add "C:\path\to\magpie-chat"`.
+
+This is not a problem with the plugin — on a machine with a normal `hosts` file, `magpie plugin add Magiczerowxy/magpie-chat` installs fine.
 
 ### No sign-in, no account
 
@@ -143,6 +193,8 @@ The service binds loopback only and refuses any request whose Origin is neither 
 - Images are sent inline as base64, 24MB per image; long conversations make bigger requests.
 - Provider icons live inside magpie's own binary; when one can't be read the server draws a letter badge.
 - At most 8 tool-call rounds.
+- Draft conversations live in memory only and are lost on reload (an empty conversation shouldn't linger anyway).
+- Font size is fixed at 13px and does not follow magpie's UI zoom.
 
 ---
 
