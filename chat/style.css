@@ -393,6 +393,13 @@ input, textarea { font: inherit; color: inherit; }
 .chev { display: inline-flex; flex: none; color: var(--faint); }
 .pill:hover .chev, .pill.on .chev { color: var(--muted); }
 
+/* 思考强度：档位都很短，不需要跟模型列表一样宽 */
+#effortPop {
+  width: max-content;
+  min-width: 104px;
+  max-width: 160px;
+}
+
 /* ---------- popover（仿 magpie .pop） ---------- */
 .pop {
   position: absolute;
@@ -675,6 +682,16 @@ input, textarea { font: inherit; color: inherit; }
   gap: 5px;
   padding: 12px 0 14px;
 }
+
+/* 流式渲染的两段结构：已写完的块（.md-stable）+ 正在写的尾巴（.md-tail）。
+   尾巴是纯文本，保留换行；两者拼接处不留多余空档。 */
+.turn-body.md .md-stable > :last-child { margin-bottom: 0; }
+.turn-body.md .md-stable:empty { display: none; }
+.turn-body.md .md-tail {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.turn-body.md .md-tail:empty { display: none; }
 
 /* 新消息入场：从下面冒上来 + 渐显。
    只给刚发出的消息加 .enter，重新打开对话时历史消息不动。 */

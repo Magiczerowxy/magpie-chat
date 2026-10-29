@@ -269,6 +269,41 @@ function parseListBlock(lines, start) {
   return { node: root, next: i };
 }
 
+/* 流式专用渲染：把正文切成"已经写完的块"和"正在写的尾巴"
+     - 稳定块（最后一个空行之前）只在跨过块边界时重渲染一次，之后整块缓存不再动
+     - 尾巴是纯文本，每帧只改 textContent —— 不再每帧清空重建整个 DOM
+   以前的写法每帧 renderMarkdown 全量重建，文字节点被反复替换、排版反复重算，
+   看上去就是一直抽搐。 */
+function renderStreaming(container, source) {
+  var text = cleanText(source || "");
+  var cut = text.lastIndexOf("\n\n");
+  var stable = cut >= 0 ? text.slice(0, cut + 2) : "";
+  var tail = cut >= 0 ? text.slice(cut + 2) : text;
+
+  var stableEl = container.firstChild && container.firstChild.classList && container.firstChild.classList.contains("md-stable")
+    ? container.firstChild : null;
+  if (!stableEl) {
+    while (container.firstChild) container.removeChild(container.firstChild);
+    stableEl = el("div", { class: "md-stable" });
+    container.appendChild(stableEl);
+    container.appendChild(el("div", { class: "md-tail" }));
+    container.dataset.stableLen = "-1";
+  }
+  var tailEl = container.lastChild;
+
+  if (container.dataset.stableLen !== String(stable.length)) {
+    renderMarkdown(stableEl, stable);
+    container.dataset.stableLen = String(stable.length);
+  }
+  // 只改尾巴里那个文本节点的值：不重建节点，光标（tail 里的 span）也就不会被删掉重建
+  var tnode = tailEl.firstChild;
+  if (!tnode || tnode.nodeType !== 3) {
+    tnode = document.createTextNode("");
+    tailEl.insertBefore(tnode, tailEl.firstChild);
+  }
+  if (tnode.nodeValue !== tail) tnode.nodeValue = tail;
+}
+
 function renderMarkdown(container, source) {
   while (container.firstChild) container.removeChild(container.firstChild);
   var lines = cleanText(source).replace(/\r\n?/g, "\n").split("\n");
@@ -482,7 +517,9 @@ var state = {
   pop: ""
 };
 
-var EFFORT_LABEL = { none: "不思考", minimal: "极低", low: "低", medium: "中", high: "高", max: "最高" };
+// 思考强度的显示名。key 是网关给的原始值（映射不动），只是显示成这些词。
+// 注意 xhigh：minimax / qwen 系列会用到，之前漏了会显示成原始串。
+var EFFORT_LABEL = { none: "None", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Xhigh", max: "Max" };
 function effortLabel(name) { return EFFORT_LABEL[name] || String(name); }
 
 var toastTimer = null;
@@ -1841,11 +1878,11 @@ function pumpTick() {
     take = Math.min(pend.length, Math.max(3, take));
     msg.content += pend.slice(0, take);
     msg.pending = pend.slice(take);
-    renderMarkdown(refs.body, msg.content);
-    // 光标永远跟在最后（renderMarkdown 每次都会重建 body，所以每帧重新挂）
-    if (refs.caret && refs.caret.parentNode) refs.caret.parentNode.removeChild(refs.caret);
-    refs.caret = el("span", { class: "streaming-caret" });
-    refs.body.appendChild(refs.caret);
+    renderStreaming(refs.body, msg.content);
+    // 光标复用同一个元素，只在第一次挂上去（每帧删了重建同样会造成 DOM 抖动）
+    if (!refs.caret) refs.caret = el("span", { class: "streaming-caret" });
+    var tailEl = refs.body.lastChild;
+    if (tailEl && refs.caret.parentNode !== tailEl) tailEl.appendChild(refs.caret);
     if (!msg.pending) {
       // 必须把光标元素从 DOM 里摘掉。只把 refs.caret 置 null 的话，
       // 最后那一帧 append 上去的 span 会一直留在正文末尾 ——
@@ -2185,6 +2222,8 @@ function finish(refs) {
     refs.think.open = false;
   }
   if (refs.dirty) { refs.dirty = false; renderMarkdown(refs.body, refs.msg.content); }
+  // 流式结束时把"稳定块 + 尾巴"的结构换回一次完整渲染，保证格式正确
+  else if (refs.body && refs.body.querySelector(".md-stable")) renderMarkdown(refs.body, refs.msg.content);
   state.liveRefs.delete(refs);
   updateMeta(refs);
   updateSend();
