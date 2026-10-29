@@ -283,6 +283,21 @@ input, textarea { font: inherit; color: inherit; }
   color: var(--muted);
 }
 .sess-act:hover { background: color-mix(in srgb, var(--fg) 10%, transparent); color: var(--fg); }
+/* 重命名时临时替换条目用的输入框 */
+.sess-rename {
+  display: block;
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: var(--card);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+  box-sizing: border-box;
+}
 .sess-act.pinned { color: var(--accent); }
 .sess-pin {
   flex: none;
@@ -661,6 +676,19 @@ input, textarea { font: inherit; color: inherit; }
   padding: 12px 0 14px;
 }
 
+/* 新消息入场：从下面冒上来 + 渐显。
+   只给刚发出的消息加 .enter，重新打开对话时历史消息不动。 */
+@keyframes turn-in {
+  from { opacity: 0; transform: translateY(34px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.turn.enter {
+  animation: turn-in .42s cubic-bezier(.16, .84, .34, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .turn.enter { animation: none; }
+}
+
 .turn + .turn { border-top: 1px solid var(--line-2); }
 
 .turn-who { display: flex; align-items: center; gap: 7px; min-height: 16px; }
@@ -800,8 +828,14 @@ input, textarea { font: inherit; color: inherit; }
   height: 12px;
   margin-left: 2px;
   vertical-align: -2px;
+  border-radius: 1.5px;
   background: var(--accent);
-  animation: blink 1s steps(2, start) infinite;
+  /* 柔和呼吸而不是硬闪：和文字流出的节奏更搭 */
+  animation: caret-breathe 1.1s ease-in-out infinite;
+}
+@keyframes caret-breathe {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .22; }
 }
 
 @keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }

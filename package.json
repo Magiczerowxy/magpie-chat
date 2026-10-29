@@ -1,6 +1,6 @@
 {
   "name": "@magpie-community/page-chat",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "description": "在 magpie 窗口里加一个「对话」页面：用 magpie 自己的模型、MCP 服务器、指令和技能聊天，支持图片与 LaTeX。A chat page inside magpie's window: talk with magpie's own models, MCP servers, instructions and skills, with images and LaTeX.",
   "files": [
     "index.mjs",

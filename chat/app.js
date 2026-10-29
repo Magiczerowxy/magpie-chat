@@ -470,6 +470,8 @@ var state = {
   // 点了"新对话"但还没发消息时，左侧先挂一条草稿；发出第一条就变成真对话，
   // 空着切走就直接丢掉，不在列表里留空壳。
   draft: null,
+  // 流式输出时是否跟着往下滚。用户手动往上滑就变 false，滑回底部再变 true。
+  follow: true,
   title: "新对话",
   busy: false,
   stopped: false,
@@ -1209,11 +1211,16 @@ function renderSessions() {
     var delBtn = el("button", { class: "sess-act", type: "button", title: "删除", "aria-label": "删除" },
       el("span", { text: "\u00d7" }));
 
+    // 重命名：铅笔图标。按钮里塞不下 input（button 不能嵌交互元素），
+    // 编辑时把这个条目整体换成一个输入框，提交/取消再换回来。
+    var renameBtn = el("button", { class: "sess-act", type: "button", title: "重命名", "aria-label": "重命名" });
+    renameBtn.innerHTML = '<svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M10.7 2.5a1.3 1.3 0 0 1 1.9 0l.9.9a1.3 1.3 0 0 1 0 1.9l-7.4 7.4-2.7.7.7-2.7z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+
     var btn = el("button", { class: "sess" + (on ? " on" : ""), type: "button", title: item.title || "对话" },
       pinned ? el("span", { class: "sess-pin", text: "\u2605" }) : null,
       el("span", { class: "sess-title", text: item.title || "未命名" }),
       el("span", { class: "sess-time", text: relTime(item.updated) }),
-      el("span", { class: "sess-acts" }, pinBtn, delBtn)
+      el("span", { class: "sess-acts" }, pinBtn, renameBtn, delBtn)
     );
     // 条目本身是 <button>，里面的操作也是 <button>；点它们要拦住冒泡，别顺带打开对话
     pinBtn.addEventListener("click", function (ev) {
@@ -1223,6 +1230,10 @@ function renderSessions() {
     delBtn.addEventListener("click", function (ev) {
       ev.stopPropagation();
       askDelete(item.id, item.title);
+    });
+    renameBtn.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      startRename(item.id, btn, item.title || "未命名");
     });
     btn.addEventListener("click", function () { openConversation(item.id); });
     box.appendChild(btn);
@@ -1240,6 +1251,36 @@ function togglePin(id, pin) {
     .then(function () { return loadConversations(); })
     .then(function () { toast(pin ? "已置顶" : "已取消置顶"); })
     .catch(function (err) { toast("置顶失败：" + err.message, true); });
+}
+
+/* 重命名：把整个条目换成一个输入框，回车/失焦保存，Esc 取消 */
+function startRename(id, rowEl, oldTitle) {
+  var input = el("input", { class: "sess-rename", type: "text", "aria-label": "重命名对话" });
+  input.value = oldTitle || "";
+  rowEl.parentNode.insertBefore(input, rowEl.nextSibling);
+  rowEl.style.display = "none";
+  input.focus();
+  input.select();
+
+  var done = false;
+  function finish(save) {
+    if (done) return;
+    done = true;
+    var val = input.value.trim().replace(/\s+/g, " ");
+    if (input.parentNode) input.parentNode.removeChild(input);
+    rowEl.style.display = "";
+    if (!save || !val || val === oldTitle) return;
+    api("/api/conversations/" + encodeURIComponent(id), { method: "PATCH", body: { title: val } })
+      .then(function () { return loadConversations(); })
+      .catch(function (err) { toast("重命名失败：" + err.message, true); });
+  }
+
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+  });
+  input.addEventListener("blur", function () { finish(true); });
+  input.addEventListener("click", function (e) { e.stopPropagation(); });
 }
 
 /* 删除：点了就删（不弹确认），删掉正在看的那条就回到空态 */
@@ -1439,11 +1480,29 @@ function bindScrollBarDrag() {
   });
 }
 
+// 距底部多少像素以内算"还在跟着看"
+var FOLLOW_GAP = 40;
+
+function nearBottom(box) {
+  if (!box) return true;
+  return box.scrollHeight - box.scrollTop - box.clientHeight <= FOLLOW_GAP;
+}
+
+// force=true：无条件回到底部并恢复跟随（发消息、切对话时用）
+// force=false：只有"还在跟随"时才滚。用户自己往上滑过就不再拽回来。
 function scrollBottom(force) {
   var box = $("#stream");
   if (!box) return;
-  var near = box.scrollHeight - box.scrollTop - box.clientHeight < 110;
-  if (force || near) box.scrollTop = box.scrollHeight;
+  if (force) {
+    state.follow = true;
+    box.scrollTop = box.scrollHeight;
+    return;
+  }
+  if (state.follow === false) return;
+  // 这里不要再判 nearBottom：流式输出每帧都在长高，"距底"天然会变大，
+  // 实时判会把"正是自己在往下写"误判成"用户滚走了"，于是永远不跟。
+  // follow 状态由 scroll / wheel / touchmove 那三个监听维护。
+  box.scrollTop = box.scrollHeight;
 }
 
 function renderMessages() {
@@ -1529,8 +1588,8 @@ function lightbox(src, name) {
   document.body.appendChild(box);
 }
 
-function buildTurn(msg) {
-  var root = el("div", { class: "turn " + msg.role });
+function buildTurn(msg, animate) {
+  var root = el("div", { class: "turn " + msg.role + (animate ? " enter" : "") });
   var name = turnLabelFor(msg);
   var icon = modelIconFor(msg);
   var label = el("span", { class: "turn-label" });
@@ -1735,6 +1794,90 @@ function scheduleMarkdown(refs) {
   });
 }
 
+/* ---------- 流式"打字机"：把一次收到的一大块按帧均匀放出来 ----------
+   网关的 delta 经常是一句话甚至一段一起到，直接渲染就是一格一格跳。
+   这里先把内容压进 msg.pending，每帧只放几个字，文字就是连续流出来的。 */
+var pumpRaf = 0;
+var pumpQueue = new Set();
+
+function pumpKick() {
+  if (!pumpRaf) pumpRaf = requestAnimationFrame(pumpTick);
+}
+
+function pumpTick() {
+  pumpRaf = 0;
+  var live = false;
+  var now = (typeof performance !== "undefined" ? performance.now() : Date.now());
+  pumpQueue.forEach(function (refs) {
+    var msg = refs.msg;
+    var pend = msg.pending || "";
+    if (!pend) return;
+    live = true;
+
+    // 分两种情况：
+    //   流式：网关一个字一个字给，积压一直很小 → 匀速走，手感最稳。
+    //   非流式：某些模型一次把整段吐出来，积压一下几百上千字 →
+    //           按"剩余时间"倒推每帧该放多少，保证 1 秒内流完。
+    var take;
+    // 进了"大块模式"就一直按进度走，直到这段文字放完 ——
+    // 不能等积压掉到 120 以下就切回慢速，那样最后一百多字会被拖成好几秒。
+    if (pend.length > 120 || msg.burstMode) {
+      if (!msg.burstMode) {
+        msg.burstMode = true;
+        // 从"收到第一段文字"那一刻开始计时，而不是从第一次渲染算 ——
+        // 中间隔着建 DOM、等 rAF 的时间，从渲染算会整体晚一拍。
+        msg.burstStart = msg.streamStartedAt || now;
+        msg.burstTotal = msg.content.length + pend.length;
+      }
+      // 按时间线性推进：progress 是已过的时间比例，target 是该显示到第几个字。
+      // 不看帧率，30fps 还是 120fps，1 秒到的瞬间都正好放完。
+      var progress = Math.min(1, (now - msg.burstStart) / 1000);
+      var target = Math.ceil(msg.burstTotal * progress);
+      take = Math.max(3, target - msg.content.length);
+    } else {
+      // 真正的流式：匀速，手感最稳
+      take = pend.length > 80 ? 6 : 3;
+    }
+    take = Math.min(pend.length, Math.max(3, take));
+    msg.content += pend.slice(0, take);
+    msg.pending = pend.slice(take);
+    renderMarkdown(refs.body, msg.content);
+    // 光标永远跟在最后（renderMarkdown 每次都会重建 body，所以每帧重新挂）
+    if (refs.caret && refs.caret.parentNode) refs.caret.parentNode.removeChild(refs.caret);
+    refs.caret = el("span", { class: "streaming-caret" });
+    refs.body.appendChild(refs.caret);
+    if (!msg.pending) {
+      // 必须把光标元素从 DOM 里摘掉。只把 refs.caret 置 null 的话，
+      // 最后那一帧 append 上去的 span 会一直留在正文末尾 ——
+      // 就是那个 6×12、背景是主题色的紫色小方块。
+      if (refs.caret && refs.caret.parentNode) refs.caret.parentNode.removeChild(refs.caret);
+      refs.caret = null;
+      pumpQueue.delete(refs);
+      msg.burstMode = false; // 这段放完了，下一轮重新判断是流式还是一次性
+      msg.burstStart = 0;
+      msg.burstTotal = 0;
+    }
+  });
+  if (live) scrollBottom(false);
+  if (pumpQueue.size) pumpRaf = requestAnimationFrame(pumpTick);
+}
+
+// 这一轮结束了：把还没放完的一次性倒出来，别让结尾缺字
+function pumpFlush(refs) {
+  var msg = refs && refs.msg;
+  if (!msg) return;
+  if (msg.pending) {
+    msg.content += msg.pending;
+    msg.pending = "";
+  }
+  msg.burstMode = false;
+  msg.burstStart = 0;
+  msg.burstTotal = 0;
+  pumpQueue.delete(refs);
+  if (refs.caret && refs.caret.parentNode) refs.caret.parentNode.removeChild(refs.caret);
+  refs.caret = null;
+}
+
 /* ================= 发送 / 停止 ================= */
 
 function autoGrow() {
@@ -1767,7 +1910,11 @@ function send() {
   renderAttachments();
   var asstMsg = {
     role: "assistant", content: "", reasoning: "", toolCalls: [],
-    usage: null, ms: 0, error: "", model: state.settings.model, stopped: false
+    usage: null, ms: 0, error: "", model: state.settings.model, stopped: false,
+    // 这一轮第一次收到文字的时刻，用来判断"一次性输出"时该用多快的流速
+    streamStartedAt: 0,
+    // 是否正处于"一次给一大段"的加速播放状态
+    burstMode: false
   };
   state.messages.push(userMsg, asstMsg);
 
@@ -1785,8 +1932,9 @@ function send() {
   var box = $("#stream");
   var empty = box.querySelector(".empty-state");
   if (empty) box.removeChild(empty);
-  box.appendChild(buildTurn(userMsg).root);
-  var refs = buildTurn(asstMsg);
+  // 刚发出的两条消息带动画（从下往上冒 + 渐显）；重新打开对话时不动
+  box.appendChild(buildTurn(userMsg, true).root);
+  var refs = buildTurn(asstMsg, true);
   box.appendChild(refs.root);
 
   input.value = "";
@@ -1873,8 +2021,11 @@ function handleEvent(evt, refs) {
       }
       break;
     case "delta":
-      msg.content += evt.text || "";
-      scheduleMarkdown(refs);
+      // 先攒着，交给打字机队列按帧放，文字才是连续流出来的
+      if (!msg.streamStartedAt) msg.streamStartedAt = (typeof performance !== "undefined" ? performance.now() : Date.now());
+      msg.pending = (msg.pending || "") + (evt.text || "");
+      pumpQueue.add(refs);
+      pumpKick();
       break;
     case "tool":
       handleTool(evt, refs);
@@ -2017,8 +2168,16 @@ function finish(refs) {
   state.busy = false;
   state.abort = null;
   state.stopped = false;
+  // 先把打字机队列里剩下的倒完，再收尾（否则最后一段可能没上屏）
+  pumpFlush(refs);
   if (refs.caret && refs.caret.parentNode) refs.caret.parentNode.removeChild(refs.caret);
   refs.caret = null;
+  // 保险：把这条消息里所有流式光标都清掉，别在正文末尾留个小色块
+  if (refs.body) {
+    refs.body.querySelectorAll(".streaming-caret").forEach(function (node) {
+      if (node.parentNode) node.parentNode.removeChild(node);
+    });
+  }
   refs.think.dataset.live = "0";
   // 输出完就自动收起思考过程；用户自己展开过就尊重他的选择
   if (!refs.think.hidden && !refs.think.dataset.user && refs.think.open) {
@@ -2105,6 +2264,22 @@ function bindUI() {
 
   // 滚动条：滚时浮现，停手淡出；可拖动
   $("#stream").addEventListener("scroll", flashScrollBar, { passive: true });
+
+  // 流式跟随：用户往上滑就停止跟随（不然每帧都被拽回底部，根本没法往回看）；
+  // 滑回底部附近再自动恢复。
+  $("#stream").addEventListener("scroll", function () {
+    var box = $("#stream");
+    state.follow = nearBottom(box);
+  }, { passive: true });
+
+  // 滚轮/触摸是最直接的"用户想往上翻"的意图，比 scroll 事件更早也更准
+  $("#stream").addEventListener("wheel", function (e) {
+    if (e.deltaY < 0) state.follow = false;
+    else if (nearBottom($("#stream"))) state.follow = true;
+  }, { passive: true });
+  $("#stream").addEventListener("touchmove", function () {
+    if (!nearBottom($("#stream"))) state.follow = false;
+  }, { passive: true });
   bindScrollBarDrag();
   window.addEventListener("resize", paintScrollBar);
 

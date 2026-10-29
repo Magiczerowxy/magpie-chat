@@ -21,7 +21,7 @@
 - **模型状态**。每条回复底部有一行：生成中显示「Magpie正在觅食ing… · 2s」并走计时；完成变绿「Magpie找到了食物！ · 2s」；出错变红「Magpie没有找到食物」（颜色平滑过渡）。耗时随对话保存，重新打开还能看到。
 - **新对话草稿**。点「+」左侧立即出现一条「新对话」；发送第一条后标题换成你输入的内容；一个字没写就切到别的对话，这条草稿会自动消失，不留空壳。
 - **公式**。`$…$`、`$$…$$`、`\(…\)`、`\[…\]` 由本地 KaTeX 渲染，随包打包，不连 CDN。
-- **对话留存**。存在 magpie 配置目录的 `magpie-chat/conversations/`；每条可以置顶或删除。
+- **对话留存**。存在 magpie 配置目录的 `magpie-chat/conversations/`；每条可以置顶、重命名或删除。
 - **和 magpie 同一个样子**。配色与字体取自 magpie 自己的设计令牌，切换主题时对话页跟着变。
 - **可调布局**。右侧栏「布局」里两个滑条：会话区宽度（100% 即铺满，最窄 560px）、输入框宽度；还能打开「同步调整」让两者始终一致（调任一个另一个跟随，开启时取较小的那个统一）。左右两侧栏都能拖拽调宽、也都能收起。
 - **代码折叠**。一条消息里有多段代码时只展开最后一段，其余收起。
@@ -124,7 +124,7 @@ magpie 的插件页面跑在 `sandbox="allow-scripts"` 的框架里：没有网�
 - **Model status.** Every reply gets a line at its foot: while generating it reads "Magpie正在觅食ing… · 2s" with a running timer; on success it turns green ("Magpie找到了食物！ · 2s"); on failure it turns red ("Magpie没有找到食物") with a smooth colour transition. The elapsed time is saved with the conversation.
 - **Draft conversations.** Clicking "+" puts a "新对话" row in the sidebar straight away; the title becomes what you typed as soon as you send. Switch away without writing anything and the draft disappears — no empty shells left behind.
 - **Math.** `$…$`, `$$…$$`, `\(…\)` and `\[…\]` render through a bundled KaTeX — no CDN.
-- **Conversations persist.** Stored under `magpie-chat/conversations/` in magpie's config directory; each can be pinned or deleted.
+- **Conversations persist.** Stored under `magpie-chat/conversations/` in magpie's config directory; each can be pinned, renamed or deleted.
 - **Looks like magpie.** Colors and fonts come from magpie's own design tokens, so the page follows the window theme.
 - **Adjustable layout.** Two sliders under Layout: conversation width (100% fills the pane, never narrower than 560px) and composer width, plus a **Sync** switch that keeps the two equal (move either one, the other follows; turning it on adopts the smaller of the two). Both sidebars can be dragged and collapsed.
 - **Collapsible code.** When a reply has several code blocks, only the last one is expanded.
