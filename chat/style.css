@@ -352,8 +352,9 @@ input, textarea { font: inherit; color: inherit; }
   align-items: center;
   gap: 5px;
   height: 24px;
-  padding: 0 10px;
-  border-radius: 6px;
+  padding: 0 11px;
+  /* 长条胶囊：全圆角 */
+  border-radius: 999px;
   background: var(--pill);
   color: var(--ctl-fg);
   font-size: 12.5px;
@@ -365,7 +366,8 @@ input, textarea { font: inherit; color: inherit; }
 .pill:disabled { opacity: .5; }
 .pill:disabled:hover { background: var(--pill); color: var(--ctl-fg); }
 .pill.on { color: var(--fg); }
-.pill.icon { padding: 0; width: 24px; justify-content: center; }
+/* 左边的 + 按钮：正圆 */
+.pill.icon { padding: 0; width: 24px; border-radius: 50%; justify-content: center; }
 .pill.icon.set { color: var(--fg); }
 .pill.icon.set::after {
   content: "";
@@ -377,6 +379,20 @@ input, textarea { font: inherit; color: inherit; }
   border-radius: 50%;
   background: var(--accent);
 }
+
+/* 输入框左边模型按钮里的品牌图标 */
+.pill-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--faint);
+}
+.pill-ico[hidden] { display: none; }
+.pill-ico .model-logo { width: 14px; height: 14px; opacity: .75; }
+.pill:hover .pill-ico, .pill.on .pill-ico { color: var(--muted); }
 
 .pill-k { color: var(--faint); font-size: 11.5px; flex: none; }
 .pill.on .pill-k, .pill:hover .pill-k { color: var(--muted); }
@@ -426,6 +442,24 @@ input, textarea { font: inherit; color: inherit; }
   from { opacity: 0; transform: translateY(-4px) scale(.985); }
   to { opacity: 1; transform: none; }
 }
+
+/* 模型品牌图标：单色 SVG 用 mask 上色，颜色跟着文字走。
+   宽高按场合微调：消息头 13px、下拉项 15px。 */
+.model-logo {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  background-color: currentColor;
+  opacity: .72;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+.turn-label .model-logo { width: 13px; height: 13px; opacity: .7; }
+.pop-item .model-logo { margin-right: -2px; }
 
 .pop-item {
   display: flex;
@@ -682,6 +716,33 @@ input, textarea { font: inherit; color: inherit; }
   gap: 5px;
   padding: 12px 0 14px;
 }
+
+/* 模型输出里的图片：max-width 撑满、max-height 限高，点开看大图 */
+.md-img {
+  display: block;
+  max-width: 100%;
+  max-height: 460px;
+  margin: 8px 0;
+  border-radius: 8px;
+  background: var(--pill);
+  cursor: zoom-in;
+  object-fit: contain;
+}
+.md-img-link {
+  display: inline-block;
+  margin: 4px 0;
+  font-size: 12px;
+  color: var(--accent);
+  word-break: break-all;
+}
+.md-img-fail {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.md-img-fail a { color: var(--accent); word-break: break-all; }
 
 /* 流式渲染的两段结构：已写完的块（.md-stable）+ 正在写的尾巴（.md-tail）。
    尾巴是纯文本，保留换行；两者拼接处不留多余空档。 */
@@ -949,23 +1010,6 @@ input, textarea { font: inherit; color: inherit; }
 }
 .empty-state b { display: block; color: var(--fg); font-weight: 500; font-size: 14px; margin-bottom: 4px; }
 .empty-state p { margin: 0; font-size: 12px; }
-.empty-sugs { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 12px; }
-
-.sug {
-  height: 24px;
-  padding: 0 10px;
-  border-radius: 6px;
-  background: var(--pill);
-  color: var(--ctl-fg);
-  font-size: 12px;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sug:hover { background: var(--pill-hover); color: var(--fg); }
-
 /* ---------- 输入区（仿 magpie .field） ---------- */
 /* 输入区占消息区宽度的 70%，跟着窗口缩放；窄窗口时才让它铺满 */
 /* 输入区宽度也单独可调（--composer-w），默认 70% */
@@ -994,9 +1038,11 @@ input, textarea { font: inherit; color: inherit; }
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 10px 12px;
+  /* 上下各加 5px：整条输入框比原来高 10px */
+  padding: 15px 12px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  /* 圆角比原来大一圈，更接近胶囊感 */
+  border-radius: 20px;
   background: var(--card);
 }
 
@@ -1017,7 +1063,11 @@ input, textarea { font: inherit; color: inherit; }
 
 #input::placeholder { color: var(--faint); }
 
-.field-foot { display: flex; align-items: center; gap: 6px; min-height: 24px; }
+/* 底部控件整行往下 4px；左边 + 再往左 4px，右边三件往右 4px。
+   用 relative 而不是 margin：只挪视觉位置，不把输入框撑高。 */
+.field-foot { display: flex; align-items: center; gap: 6px; min-height: 24px; position: relative; top: 4px; }
+#attachBtn { margin-left: -4px; }
+#send { margin-right: -4px; }
 /* 模型、思考、发送都贴在右下角，设置在最左 */
 
 
@@ -1026,14 +1076,18 @@ input, textarea { font: inherit; color: inherit; }
   align-items: center;
   justify-content: center;
   flex: none;
+  width: 24px;
   height: 24px;
-  padding: 0 12px;
-  border-radius: 6px;
+  padding: 0;
+  /* 圆形按钮，里面是向上的箭头 */
+  border-radius: 50%;
   background: var(--accent);
   color: var(--accent-fg);
   font-size: 12.5px;
   font-weight: 500;
 }
+
+.send-label { display: inline-flex; align-items: center; justify-content: center; }
 
 .send:hover:not(:disabled) { filter: brightness(1.06); }
 .send:disabled { opacity: .5; }

